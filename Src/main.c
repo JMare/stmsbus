@@ -1,3 +1,35 @@
+/**
+  ******************************************************************************
+  * File Name          : main.c
+  * Description        : Main program body
+  ******************************************************************************
+  *
+  * COPYRIGHT(c) 2016 STMicroelectronics
+  *
+  * Redistribution and use in source and binary forms, with or without modification,
+  * are permitted provided that the following conditions are met:
+  *   1. Redistributions of source code must retain the above copyright notice,
+  *      this list of conditions and the following disclaimer.
+  *   2. Redistributions in binary form must reproduce the above copyright notice,
+  *      this list of conditions and the following disclaimer in the documentation
+  *      and/or other materials provided with the distribution.
+  *   3. Neither the name of STMicroelectronics nor the names of its contributors
+  *      may be used to endorse or promote products derived from this software
+  *      without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  *
+  ******************************************************************************
+  */
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f3xx_hal.h"
 
@@ -9,6 +41,7 @@
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
@@ -21,6 +54,7 @@ void Error_Handler(void);
 static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_USART3_UART_Init(void);
 
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
@@ -35,7 +69,7 @@ sbusportdata_t sbus_prim;
 uint8_t rx_index_prim = 0;
 uint8_t packet_recvd_prim = 0;
 
-char rx_data_sec[2], rx_Buffer_sec[25];
+char rx_data_sec[2], rx_buffer_sec[25];
 sbusportdata_t sbus_sec;
 uint8_t rx_index_sec = 0;
 uint8_t packet_recvd_sec = 0;
@@ -44,12 +78,8 @@ uint8_t packet_recvd_sec = 0;
 //Interrupt callback routine
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-	uint8_t i;
 	if (huart->Instance == USART2)	//current UART
 		{
-      // HAL_UART_Transmit(&huart1, "this is a fucking callback\n\r", 22, 1000);
-      //HAL_UART_Transmit(&huart1, Rx_data[0], 1, 1000);
-
       uint8_t discard = 0;
       if(rx_index_prim == 0 && rx_data_prim[0] != 0x0F) discard = 1;
 
@@ -63,6 +93,21 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
       }
       HAL_UART_Receive_IT(&huart2, rx_data_prim, 1);	//activate UART receive interrupt every time
 		}
+    if (huart->Instance == USART3)	//current UART
+		{
+      uint8_t discard = 0;
+      if(rx_index_sec == 0 && rx_data_sec[0] != 0x0F) discard = 1;
+
+      if(!discard){
+        rx_buffer_sec[rx_index_sec++] = rx_data_sec[0];
+      }
+      if(rx_index_sec == 25 ){
+        rx_index_sec = 0;
+        packet_recvd_sec = 1;
+        __HAL_UART_DISABLE_IT(&huart3, UART_IT_RXNE);
+      }
+      HAL_UART_Receive_IT(&huart3, rx_data_sec, 1);	//activate UART receive interrupt every time
+		}
  
 }
 
@@ -72,7 +117,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-/* USER CODE END 1 */
+  /* USER CODE END 1 */
 
   /* MCU Configuration----------------------------------------------------------*/
 
@@ -86,10 +131,12 @@ int main(void)
   MX_GPIO_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
+  MX_USART3_UART_Init();
 
   /* USER CODE BEGIN 2 */
 
   HAL_UART_Receive_IT(&huart2, rx_data_prim, 1);	//activate UART receive interrupt every time
+  HAL_UART_Receive_IT(&huart3, rx_data_sec, 1);	//activate UART receive interrupt every time
   HAL_UART_Transmit(&huart1, "Starting Up...\n\r", 16, 1000);
   /* USER CODE END 2 */
 
@@ -106,8 +153,16 @@ int main(void)
       packet_recvd_prim = 0;
       __HAL_UART_ENABLE_IT(&huart2, UART_IT_RXNE);
     }
+    if(packet_recvd_sec){
+      sbusDecode(rx_buffer_sec, &sbus_sec);
+      packet_recvd_sec = 0;
+      __HAL_UART_ENABLE_IT(&huart3, UART_IT_RXNE);
+    }
 
+    HAL_UART_Transmit(&huart1, "PRIM", 4, 1000);
     sbusPrint(&huart1, &sbus_prim);
+    HAL_UART_Transmit(&huart1, "SEC", 4, 1000);
+    sbusPrint(&huart1, &sbus_sec);
 
   }
   /* USER CODE END 3 */
@@ -143,9 +198,11 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART1|RCC_PERIPHCLK_USART2;
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART1|RCC_PERIPHCLK_USART2
+                              |RCC_PERIPHCLK_USART3;
   PeriphClkInit.Usart1ClockSelection = RCC_USART1CLKSOURCE_PCLK2;
   PeriphClkInit.Usart2ClockSelection = RCC_USART2CLKSOURCE_PCLK1;
+  PeriphClkInit.Usart3ClockSelection = RCC_USART3CLKSOURCE_PCLK1;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
@@ -201,6 +258,27 @@ static void MX_USART2_UART_Init(void)
 
 }
 
+/* USART3 init function */
+static void MX_USART3_UART_Init(void)
+{
+
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 100000;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_2;
+  huart3.Init.Parity = UART_PARITY_EVEN;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+}
+
 /** Pinout Configuration
 */
 static void MX_GPIO_Init(void)
@@ -209,6 +287,8 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
 }
 
